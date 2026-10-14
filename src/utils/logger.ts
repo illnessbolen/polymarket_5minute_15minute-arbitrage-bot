@@ -19,7 +19,7 @@ export function setLogLevel(level: LogLevel | string): void {
       warn: LogLevel.WARN,
       error: LogLevel.ERROR,
     };
-    currentLogLevel = levelMap[level.toLowerCase()] || LogLevel.INFO;
+    currentLogLevel = levelMap[level.toLowerCase()] ?? LogLevel.INFO;
   } else {
     currentLogLevel = level;
   }

@@ -57,10 +57,10 @@ export class MarketStream extends EventEmitter {
   private readonly books = new Map<string, OrderBook>();
   private readonly socket: ManagedSocket;
   private desyncs = 0;
-  private resyncTimer: NodeJS.Timeout | null = null;
   private watchdog: NodeJS.Timeout | null = null;
-  private lastResyncAt = 0;
   private running = false;
+  /** Books waiting for a fresh snapshot: when they went stale and how often we re-requested one. */
+  private readonly stale = new Map<string, { since: number; attempts: number; lastAttempt: number }>();
 
   constructor() {
     super();
@@ -70,6 +70,7 @@ export class MarketStream extends EventEmitter {
       pingIntervalMs: 10_000,
       staleAfterMs: 30_000,
       onOpen: (send) => {
+        this.stale.clear();
         for (const book of this.books.values()) book.reset();
         if (this.books.size > 0) {
           send({ assets_ids: [...this.books.keys()], type: "market", custom_feature_enabled: true });
@@ -85,14 +86,12 @@ export class MarketStream extends EventEmitter {
   start(): void {
     this.running = true;
     this.socket.start();
-    this.watchdog = setInterval(() => this.resyncIfStale(), 5_000);
+    this.watchdog = setInterval(() => this.resyncStale(), 1_000);
   }
 
   stop(): void {
     this.running = false;
-    if (this.resyncTimer) clearTimeout(this.resyncTimer);
     if (this.watchdog) clearInterval(this.watchdog);
-    this.resyncTimer = null;
     this.watchdog = null;
     this.socket.stop();
   }
@@ -138,6 +137,7 @@ export class MarketStream extends EventEmitter {
           if (!book) break;
           book.applySnapshot(toLevels(msg.bids), toLevels(msg.asks), ts, msg.hash);
           if (msg.tick_size) book.tickSize = Number(msg.tick_size);
+          this.stale.delete(book.tokenId);
           touched.add(book.tokenId);
           break;
         }
@@ -153,9 +153,10 @@ export class MarketStream extends EventEmitter {
         }
         case "best_bid_ask": {
           const book = msg.asset_id ? this.books.get(msg.asset_id) : undefined;
-          if (!book || !book.ready) break;
           // best_bid_ask can arrive a few ms before the price_change that adds a
-          // new level, so it is only used to drop consumed levels.
+          // new level, or after newer updates, so it is only used to drop
+          // consumed levels, and only when it is newer than the book.
+          if (!book || !book.ready || ts <= book.exchangeTs) break;
           this.reconcileTop(book, msg.best_bid, msg.best_ask, false);
           touched.add(book.tokenId);
           break;
@@ -200,26 +201,38 @@ export class MarketStream extends EventEmitter {
 
     book.ready = false;
     this.desyncs++;
+    if (!this.stale.has(book.tokenId)) this.stale.set(book.tokenId, { since: Date.now(), attempts: 0, lastAttempt: 0 });
     logDebug(`[clob-market] book ${book.tokenId.slice(0, 10)}… missing top level (#${this.desyncs})`);
-    this.scheduleResync();
   }
 
-  /** Resubscribe if some book is still unready after a grace period (a snapshot usually arrives first). */
-  private scheduleResync(): void {
-    if (this.resyncTimer) return;
-    this.resyncTimer = setTimeout(() => {
-      this.resyncTimer = null;
-      this.resyncIfStale();
-    }, 2_000);
-  }
-
-  private resyncIfStale(): void {
+  /**
+   * A book that went stale normally recovers with the next `book` message
+   * (sent after trades). If it does not within a second, re-request a
+   * snapshot for just that token (unsubscribe + subscribe); reconnect only if
+   * that keeps failing.
+   */
+  private resyncStale(): void {
+    if (!this.running || !this.socket.isOpen || this.stale.size === 0) return;
     const now = Date.now();
-    const stale = [...this.books.values()].some((b) => !b.ready);
-    if (!this.running || !stale || !this.socket.isOpen) return;
-    if (now - this.socket.connectedAt < 5_000 || now - this.lastResyncAt < 15_000) return;
-    this.lastResyncAt = now;
-    logWarn("[clob-market] order book out of sync; resubscribing");
-    this.socket.restart();
+    const due: string[] = [];
+    for (const [tokenId, st] of this.stale) {
+      if (!this.books.has(tokenId)) {
+        this.stale.delete(tokenId);
+        continue;
+      }
+      if (now - st.since < 1_000 || now - st.lastAttempt < 3_000) continue;
+      if (st.attempts >= 3) {
+        logWarn("[clob-market] order book snapshot not received after 3 requests; reconnecting");
+        this.socket.restart();
+        return;
+      }
+      st.attempts++;
+      st.lastAttempt = now;
+      due.push(tokenId);
+    }
+    if (due.length === 0) return;
+    logDebug(`[clob-market] re-requesting snapshots for ${due.length} book(s)`);
+    this.socket.send({ assets_ids: due, operation: "unsubscribe" });
+    setTimeout(() => this.socket.send({ assets_ids: due, operation: "subscribe", custom_feature_enabled: true }), 300);
   }
 }
