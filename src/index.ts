@@ -8,6 +8,8 @@ import { ArbitrageBot } from "./services/bot";
 import { PaperVenue } from "./execution/paper-venue";
 import { LiveVenue } from "./execution/live-venue";
 import type { Venue } from "./execution/venue";
+import { Redeemer } from "./services/redeemer";
+import { Journal } from "./services/journal";
 import { logError, logInfo, logWarn, setLogLevel } from "./utils/logger";
 
 async function main(): Promise<void> {
@@ -38,11 +40,25 @@ async function main(): Promise<void> {
   bot = new ArbitrageBot(cfg, venue);
   await bot.start();
 
+  let redeemer: Redeemer | null = null;
+  if (cfg.mode === "live" && cfg.autoRedeem) {
+    const r = new Redeemer(cfg, new Journal(cfg.logDir));
+    try {
+      if (await r.init()) {
+        r.start();
+        redeemer = r;
+      }
+    } catch (err) {
+      logError(`Auto-redeem disabled: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   let stopping = false;
   const shutdown = async (signal: string) => {
     if (stopping) return;
     stopping = true;
     logInfo(`Received ${signal}, shutting down...`);
+    redeemer?.stop();
     await bot?.stop();
     process.exit(0);
   };

@@ -6,7 +6,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { logError } from "../utils/logger";
 
-export type JournalKind = "opportunities" | "trades" | "windows" | "events";
+export type JournalKind = "opportunities" | "trades" | "windows" | "events" | "redemptions";
 
 export class Journal {
   constructor(private readonly dir: string) {

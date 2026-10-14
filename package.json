@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.test.json",
     "check": "ts-node src/scripts/check.ts",
     "approve": "ts-node src/scripts/approve.ts",
+    "redeem": "ts-node src/scripts/redeem.ts",
     "report": "ts-node src/scripts/report.ts"
   },
   "keywords": [

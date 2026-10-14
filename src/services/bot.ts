@@ -483,7 +483,11 @@ export class ArbitrageBot {
         logInfo(
           `[SETTLED] ${state.asset} ${hhmm(state.window.end)}: 5m ${r5!.winner}, 15m ${r15!.winner}; ` +
             `payout ${payout.toFixed(2)} - cost ${ledger.netCash.toFixed(2)} = PnL ${pnl.toFixed(2)} USD` +
-            (this.cfg.mode === "live" ? " (redeem winning shares on Polymarket to collect)" : ""),
+            (this.cfg.mode === "live"
+              ? this.cfg.autoRedeem
+                ? " (winning shares will be redeemed automatically)"
+                : " (redeem winning shares with `npm run redeem` or on polymarket.com)"
+              : ""),
         );
       } else {
         logWarn(`${state.asset} ${hhmm(state.window.end)}: resolution not available; PnL unknown`);

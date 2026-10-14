@@ -56,6 +56,14 @@ export interface Config {
   apiKey: string;
   apiSecret: string;
   apiPassphrase: string;
+
+  // Automatic redemption of resolved positions (live mode)
+  autoRedeem: boolean;
+  redeemIntervalMs: number;
+  /** Skip conditions whose winning shares are worth less than this (gas is not free). */
+  redeemMinPayoutUsd: number;
+  /** "updown": only this bot's up/down markets; "all": every resolved binary position of the wallet. */
+  redeemScope: "updown" | "all";
 }
 
 function num(name: string, fallback: number): number {
@@ -86,6 +94,11 @@ export function loadConfig(): Config {
   const unhedgedAction = str("UNHEDGED_ACTION", "sell").toLowerCase();
   if (unhedgedAction !== "sell" && unhedgedAction !== "hold") {
     throw new Error(`UNHEDGED_ACTION must be "sell" or "hold", got "${unhedgedAction}"`);
+  }
+
+  const redeemScope = str("REDEEM_SCOPE", "updown").toLowerCase();
+  if (redeemScope !== "updown" && redeemScope !== "all") {
+    throw new Error(`REDEEM_SCOPE must be "updown" or "all", got "${redeemScope}"`);
   }
 
   const assets = str("ASSETS", "btc,eth,sol,xrp")
@@ -123,10 +136,14 @@ export function loadConfig(): Config {
     privateKey: str("POLY_PRIVATE_KEY"),
     signatureType: parseSignatureType(str("POLY_SIGNATURE_TYPE", str("POLY_WALLET_TYPE", "0"))),
     funderAddress: str("POLY_FUNDER"),
-    rpcUrl: str("POLY_RPC_URL", "https://polygon-rpc.com"),
+    rpcUrl: str("POLY_RPC_URL", "https://polygon-bor-rpc.publicnode.com"),
     apiKey: str("CLOB_API_KEY"),
     apiSecret: str("CLOB_SECRET"),
     apiPassphrase: str("CLOB_PASSPHRASE"),
+    autoRedeem: str("AUTO_REDEEM", "1") !== "0",
+    redeemIntervalMs: num("REDEEM_INTERVAL_MS", 5 * 60_000),
+    redeemMinPayoutUsd: num("REDEEM_MIN_PAYOUT_USD", 1),
+    redeemScope: redeemScope as Config["redeemScope"],
   };
 
   if (cfg.minEdge < 0) throw new Error("MIN_EDGE must be >= 0");

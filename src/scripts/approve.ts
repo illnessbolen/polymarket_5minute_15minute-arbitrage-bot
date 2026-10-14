@@ -2,6 +2,7 @@
  * One-time on-chain approvals for an EOA wallet (POLY_SIGNATURE_TYPE=0):
  *   - collateral (pUSD) allowance for the CTF Exchange V2
  *   - conditional-token (ERC-1155) operator approval for the exchange (needed to sell)
+ *   - conditional-token operator approval for the CTF collateral adapter (needed to redeem)
  *
  * Polymarket proxy / Safe wallets (signature types 1 and 2) are approved by
  * Polymarket when you deposit through the website; this script is not needed.
@@ -13,6 +14,7 @@
 import "dotenv/config";
 import { getContractConfig } from "@polymarket/clob-client-v2";
 import { loadConfig } from "../config";
+import { REDEEM_CONTRACTS } from "../execution/redeem";
 
 const ERC20_ABI = [
   { type: "function", name: "allowance", stateMutability: "view", inputs: [{ name: "owner", type: "address" }, { name: "spender", type: "address" }], outputs: [{ type: "uint256" }] },
@@ -47,12 +49,14 @@ async function main(): Promise<void> {
   const collateral = contracts.collateral as `0x${string}`;
   const ctf = contracts.conditionalTokens as `0x${string}`;
   const exchange = contracts.exchangeV2 as `0x${string}`;
+  const adapter = REDEEM_CONTRACTS.ctfCollateralAdapter;
 
-  const [gas, balance, allowance, operator] = await Promise.all([
+  const [gas, balance, allowance, operator, adapterOperator] = await Promise.all([
     pub.getBalance({ address: account.address }),
     pub.readContract({ address: collateral, abi: ERC20_ABI, functionName: "balanceOf", args: [account.address] }),
     pub.readContract({ address: collateral, abi: ERC20_ABI, functionName: "allowance", args: [account.address, exchange] }),
     pub.readContract({ address: ctf, abi: ERC1155_ABI, functionName: "isApprovedForAll", args: [account.address, exchange] }),
+    pub.readContract({ address: ctf, abi: ERC1155_ABI, functionName: "isApprovedForAll", args: [account.address, adapter] }),
   ]);
 
   console.log(`Wallet:               ${account.address}`);
@@ -61,6 +65,8 @@ async function main(): Promise<void> {
   console.log(`Exchange V2:          ${exchange}`);
   console.log(`  collateral allowance: ${allowance >= maxUint256 / 2n ? "unlimited" : formatUnits(allowance, 6)}`);
   console.log(`  token approval:       ${operator ? "yes" : "no"}`);
+  console.log(`Redeem adapter:       ${adapter}`);
+  console.log(`  token approval:       ${adapterOperator ? "yes" : "no"}`);
 
   const todo: Array<{ label: string; run: () => Promise<`0x${string}`> }> = [];
   if (allowance < maxUint256 / 2n) {
@@ -73,6 +79,13 @@ async function main(): Promise<void> {
     todo.push({
       label: "approve outcome tokens for Exchange V2",
       run: () => wallet.writeContract({ address: ctf, abi: ERC1155_ABI, functionName: "setApprovalForAll", args: [exchange, true] }),
+    });
+  }
+
+  if (!adapterOperator) {
+    todo.push({
+      label: "approve outcome tokens for the redeem adapter",
+      run: () => wallet.writeContract({ address: ctf, abi: ERC1155_ABI, functionName: "setApprovalForAll", args: [adapter, true] }),
     });
   }
 
