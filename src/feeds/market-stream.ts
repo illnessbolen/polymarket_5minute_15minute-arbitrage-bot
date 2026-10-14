@@ -60,6 +60,7 @@ export class MarketStream extends EventEmitter {
   private resyncTimer: NodeJS.Timeout | null = null;
   private watchdog: NodeJS.Timeout | null = null;
   private lastResyncAt = 0;
+  private running = false;
 
   constructor() {
     super();
@@ -82,11 +83,13 @@ export class MarketStream extends EventEmitter {
   }
 
   start(): void {
+    this.running = true;
     this.socket.start();
     this.watchdog = setInterval(() => this.resyncIfStale(), 5_000);
   }
 
   stop(): void {
+    this.running = false;
     if (this.resyncTimer) clearTimeout(this.resyncTimer);
     if (this.watchdog) clearInterval(this.watchdog);
     this.resyncTimer = null;
@@ -113,8 +116,7 @@ export class MarketStream extends EventEmitter {
     if (same) return;
     for (const id of [...this.books.keys()]) if (!next.has(id)) this.books.delete(id);
     for (const id of next) if (!this.books.has(id)) this.books.set(id, new OrderBook(id));
-    if (this.books.size > 0) this.socket.restart();
-    else this.socket.stop();
+    if (this.running) this.socket.restart();
   }
 
   private handle(text: string): void {
@@ -214,7 +216,7 @@ export class MarketStream extends EventEmitter {
   private resyncIfStale(): void {
     const now = Date.now();
     const stale = [...this.books.values()].some((b) => !b.ready);
-    if (!stale || !this.socket.isOpen) return;
+    if (!this.running || !stale || !this.socket.isOpen) return;
     if (now - this.socket.connectedAt < 5_000 || now - this.lastResyncAt < 15_000) return;
     this.lastResyncAt = now;
     logWarn("[clob-market] order book out of sync; resubscribing");

@@ -55,7 +55,6 @@ interface PairState {
 
 interface SettlementJob {
   state: PairState;
-  ledger: WindowLedger | undefined;
   dueAt: number;
   giveUpAt: number;
 }
@@ -227,7 +226,6 @@ export class ArbitrageBot {
     if (state.m5 && state.m15) {
       this.settlements.push({
         state,
-        ledger: this.ledgers.get(state.key),
         dueAt: now + SETTLE_DELAY_MS,
         giveUpAt: now + SETTLE_GIVE_UP_MS,
       });
@@ -334,6 +332,7 @@ export class ArbitrageBot {
       state.stats.lastBlock = budget.reason;
       return;
     }
+    state.stats.lastBlock = null;
 
     const opp = findOpportunity(
       q5,
@@ -402,17 +401,29 @@ export class ArbitrageBot {
     this.journal.write("trades", { window: state.key, ...result });
 
     if (this.venue.reconcile && ledger.positions.size > 0) {
-      const expected = ledger.expectedShares();
-      setTimeout(() => {
-        this.venue.reconcile!(expected)
-          .then((problem) => {
-            if (!problem) return;
-            this.journal.write("events", { type: "reconcile_mismatch", window: state.key, problem });
-            this.risk.halt(`exchange balances differ from the bot's records: ${problem}`);
-          })
-          .catch((err) => logWarn(`Balance reconciliation failed: ${String(err)}`));
-      }, 5_000);
+      void this.reconcile(state, ledger.expectedShares());
     }
+  }
+
+  /**
+   * Compare exchange balances with the ledger a few seconds after a trade.
+   * Balances can lag settlement, so a mismatch must persist before halting.
+   */
+  private async reconcile(state: PairState, expected: Map<string, number>): Promise<void> {
+    let problem: string | null = null;
+    for (const delayMs of [5_000, 10_000, 20_000]) {
+      await new Promise((r) => setTimeout(r, delayMs));
+      try {
+        problem = await this.venue.reconcile!(expected);
+      } catch (err) {
+        logWarn(`Balance reconciliation failed: ${String(err)}`);
+        return;
+      }
+      if (!problem) return;
+      logWarn(`${state.asset}: balance check mismatch (${problem}); re-checking`);
+    }
+    this.journal.write("events", { type: "reconcile_mismatch", window: state.key, problem });
+    this.risk.halt(`exchange balances differ from the bot's records: ${problem}`);
   }
 
   // ---------------------------------------------------------------- settlement
@@ -433,7 +444,9 @@ export class ArbitrageBot {
   }
 
   private async settle(job: SettlementJob, now: number): Promise<boolean> {
-    const { state, ledger } = job;
+    const { state } = job;
+    // Looked up now: a trade still executing at rollover may have created it late.
+    const ledger = this.ledgers.get(state.key);
     const m5 = state.m5!;
     const m15 = state.m15!;
     let r5;

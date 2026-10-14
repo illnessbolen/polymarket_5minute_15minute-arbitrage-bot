@@ -130,6 +130,9 @@ export function loadConfig(): Config {
   };
 
   if (cfg.minEdge < 0) throw new Error("MIN_EDGE must be >= 0");
+  if (cfg.noTradeLastSeconds < 5) {
+    throw new Error("NO_TRADE_LAST_SECONDS must be >= 5 so a one-sided fill can be repaired before the books close");
+  }
   if (cfg.slippageTicks < 0 || !Number.isInteger(cfg.slippageTicks)) throw new Error("SLIPPAGE_TICKS must be a non-negative integer");
   if (cfg.mode === "live") {
     if (!cfg.privateKey) throw new Error("TRADING_MODE=live requires POLY_PRIVATE_KEY");

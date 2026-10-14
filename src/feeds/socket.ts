@@ -51,9 +51,8 @@ export class ManagedSocket {
     }
   }
 
-  /** Drop the current connection and reconnect immediately (e.g. to resubscribe). */
+  /** Drop the current connection (if any) and connect again immediately, e.g. to resubscribe. */
   restart(): void {
-    if (this.stopped) return;
     this.stop();
     this.stopped = false;
     this.backoffMs = 1000;

@@ -27,6 +27,9 @@ export interface RepairConfig {
 }
 
 export class TradeExecutor {
+  /** Market metadata of recently traded tokens, kept so repairs work across a window rollover. */
+  private readonly known = new Map<string, MarketInfo>();
+
   constructor(
     private readonly venue: Venue,
     private readonly books: (tokenId: string) => OrderBook | undefined,
@@ -36,6 +39,14 @@ export class TradeExecutor {
 
   async execute(opp: Opportunity): Promise<TradeResult> {
     const started = Date.now();
+    if (this.known.size > 500) this.known.clear();
+    for (const tokenId of [opp.up.tokenId, opp.down.tokenId]) {
+      const m = this.markets(tokenId);
+      if (m) {
+        this.known.set(m.upTokenId, m);
+        this.known.set(m.downTokenId, m);
+      }
+    }
     const upReq = this.request(opp.up.tokenId, opp.up.shares, opp.up.limitPrice);
     const downReq = this.request(opp.down.tokenId, opp.down.shares, opp.down.limitPrice);
     if (!upReq || !downReq) throw new Error("market metadata missing for opportunity legs");
@@ -70,8 +81,12 @@ export class TradeExecutor {
     return result;
   }
 
+  private market(tokenId: string): MarketInfo | undefined {
+    return this.markets(tokenId) ?? this.known.get(tokenId);
+  }
+
   private request(tokenId: string, shares: number, limitPrice: number): OrderRequest | null {
-    const m = this.markets(tokenId);
+    const m = this.market(tokenId);
     if (!m) return null;
     const outcome = tokenId === m.upTokenId ? "UP" : "DOWN";
     return {
@@ -98,7 +113,7 @@ export class TradeExecutor {
         `${missingReq.outcome} ${missingReq.horizon} short by ${missing.toFixed(2)} shares; repairing`,
     );
 
-    const minSize = this.markets(missingReq.tokenId)?.minOrderSize ?? 5;
+    const minSize = this.market(missingReq.tokenId)?.minOrderSize ?? 5;
     if (missing < minSize) {
       result.note = `residual imbalance of ${missing.toFixed(2)} shares (below the ${minSize}-share order minimum)`;
       logWarn(`Keeping ${result.note}`);
