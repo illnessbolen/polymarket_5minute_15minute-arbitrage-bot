@@ -1,33 +1,41 @@
 {
-  "name": "btc5-15-arbitrage-bot",
-  "version": "1.0.0",
-  "description": "Production-grade BTC 5-15 minute binary prediction market arbitrage bot",
+  "name": "polymarket-updown-arbitrage-bot",
+  "version": "2.0.0",
+  "description": "Cross-horizon arbitrage bot for Polymarket 5-minute / 15-minute crypto up-or-down markets",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "watch": "tsc --watch",
-    "simulate": "ts-node src/simulate.ts",
-    "test-beat-price": "ts-node src/test-beat-price.ts"
+    "test": "node --require ts-node/register --test test/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
+    "check": "ts-node src/scripts/check.ts",
+    "approve": "ts-node src/scripts/approve.ts",
+    "report": "ts-node src/scripts/report.ts"
   },
-  "keywords": ["polymarket", "arbitrage", "trading", "btc", "binary-options"],
+  "keywords": [
+    "polymarket",
+    "arbitrage",
+    "trading",
+    "crypto",
+    "prediction-markets"
+  ],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
+  "engines": {
+    "node": ">=20.10"
+  },
   "dependencies": {
-    "@types/node": "^20.0.0",
+    "@polymarket/clob-client-v2": "1.2.0",
     "dotenv": "^16.4.5",
-    "ethers": "^6.16.0",
-    "ts-node": "^10.9.2",
-    "typescript": "^5.9.3",
-    "ws": "^8.18.0",
-    "@types/ws": "^8.5.10",
-    "mongodb": "^6.3.0",
-    "uuid": "^9.0.1",
-    "@types/uuid": "^9.0.7"
+    "viem": "2.57.1",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0"
+    "@types/node": "^20.0.0",
+    "@types/ws": "^8.5.10",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
   }
 }

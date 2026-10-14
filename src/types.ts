@@ -1,222 +1,114 @@
 /**
- * Type definitions for BTC 5-15 minute arbitrage bot
+ * Shared types for the 5m/15m up-or-down arbitrage bot.
  */
 
-export type MarketType = "5m" | "15m";
-export type TokenSide = "up" | "down";
-export type TradeStatus = "filled" | "canceled" | "failed" | "pending";
-export type MarketResult = "UP" | "DOWN" | "PENDING";
+export type Horizon = "5m" | "15m";
+export type Outcome = "UP" | "DOWN";
 
-/**
- * Beat Price - Critical concept
- * Fixed target BTC price used only to determine final market outcome at endTime
- * NOT a trading price, bid/ask, or fair value
- */
-export interface BeatPrice {
-  value: number;
-  timestamp: number; // Market start timestamp
-  source: "coingecko" | "polymarket" | "calculated";
+/** Taker fee parameters published per market in Gamma `feeSchedule`. */
+export interface FeeSchedule {
+  rate: number;
+  exponent: number;
+  takerOnly: boolean;
 }
 
-/**
- * Market data with beat price and resolution info
- */
-export interface MarketData {
-  marketId: string;
-  marketType: MarketType;
-  eventId: string;
+/** Static description of one up/down market, built from the Gamma event. */
+export interface MarketInfo {
+  asset: string;
+  horizon: Horizon;
   slug: string;
-  startTime: number; // Unix timestamp
-  endTime: number; // Unix timestamp
-  beatPrice: BeatPrice | null;
-  tokens: {
-    upTokenId: string;
-    downTokenId: string;
-  };
-  // Executable prices (best ask for buying)
-  upPrice: number | null;
-  downPrice: number | null;
-  // Liquidity info
-  upLiquidity: number;
-  downLiquidity: number;
-  // Resolution data (after endTime)
-  finalFinishPrice: number | null;
-  result: MarketResult;
-  // Price timeline for logging
-  priceHistory: PriceSnapshot[];
-}
-
-export interface PriceSnapshot {
-  timestamp: number;
-  upPrice: number | null;
-  downPrice: number | null;
-  source: "websocket" | "rest";
-}
-
-/**
- * Order book level
- */
-export interface OrderBookLevel {
-  price: string;
-  size: string;
-}
-
-export interface OrderBook {
-  bids: OrderBookLevel[];
-  asks: OrderBookLevel[];
-  timestamp: number;
-}
-
-/**
- * Arbitrage opportunity detection result
- */
-export interface ArbitrageOpportunity {
-  exists: boolean;
-  case: "A" | "B" | "C" | null;
-  direction: {
-    upMarket: MarketType;
-    downMarket: MarketType;
-  } | null;
-  prices: {
-    upPrice: number;
-    downPrice: number;
-    sumPrice: number;
-  } | null;
-  beatPrices: {
-    beat5m: number;
-    beat15m: number;
-  } | null;
-  endTime: number | null;
-  timestamp: number;
-  reason?: string;
-}
-
-/**
- * Trade execution parameters
- */
-export interface TradeParams {
+  eventId: string;
+  conditionId: string;
+  title: string;
+  /** Window start, unix seconds (the "price to beat" is fixed at this instant). */
+  startTime: number;
+  /** Window end, unix seconds (settlement instant). */
+  endTime: number;
   upTokenId: string;
   downTokenId: string;
-  upMarket: MarketType;
-  downMarket: MarketType;
-  upPrice: number;
-  downPrice: number;
-  quantity: number;
-  orderType: "market" | "limit";
-  limitPrice?: number;
+  tickSize: number;
+  minOrderSize: number;
+  fee: FeeSchedule;
+  negRisk: boolean;
+  acceptingOrders: boolean;
+  closed: boolean;
 }
 
-/**
- * Trade execution result
- */
-export interface TradeExecution {
-  tradeId: string;
-  timestamp: number;
-  market5Id: string;
-  market15Id: string;
-  direction: {
-    upMarket: MarketType;
-    downMarket: MarketType;
-  };
-  prices: {
-    upPrice: number;
-    downPrice: number;
-    sumPrice: number;
-  };
-  quantity: number;
-  latencyMs: number;
-  status: TradeStatus;
-  upOrderId?: string;
-  downOrderId?: string;
-  upOrderStatus?: string;
-  downOrderStatus?: string;
-  error?: string;
-  pnlEstimate: number;
+export interface BookLevel {
+  price: number;
+  size: number;
 }
 
-/**
- * MongoDB document schemas
- */
-export interface TradeRecord {
-  _id?: string;
-  timestamp: number;
-  market5_id: string;
-  market15_id: string;
-  direction: {
-    upMarket: MarketType;
-    downMarket: MarketType;
-  };
-  price_up: number;
-  price_down: number;
-  sum_price: number;
-  quantity: number;
-  latency_ms: number;
-  status: TradeStatus;
-  up_order_id?: string;
-  down_order_id?: string;
-  pnl_estimate: number;
-  error?: string;
-}
-
-export interface MarketDataRecord {
-  _id?: string;
-  market_id: string;
-  market_type: MarketType;
-  event_id: string;
-  slug: string;
-  start_time: number;
-  end_time: number;
-  beat_price: number | null;
-  beat_price_timestamp: number | null;
-  final_finish_price: number | null;
-  result: MarketResult;
-  price_timeline: PriceSnapshot[];
-  created_at: number;
-  updated_at: number;
-}
-
-/**
- * WebSocket message types
- */
-export interface WebSocketMessage {
-  type: string;
-  channel?: string;
-  data?: unknown;
-}
-
-export interface PriceUpdateMessage {
+/** One leg of a planned or executed trade. */
+export interface LegPlan {
+  horizon: Horizon;
+  outcome: Outcome;
   tokenId: string;
-  price: string;
-  timestamp: number;
+  shares: number;
+  /** Volume-weighted price expected from the current book. */
+  avgPrice: number;
+  /** Worst book level touched; the order's limit price. */
+  limitPrice: number;
+  /** Expected USDC spent on shares (excluding fees). */
+  cost: number;
+  /** Expected taker fee in USDC. */
+  fee: number;
+  tickSize: number;
+  negRisk: boolean;
 }
 
-export interface OrderBookUpdateMessage {
-  tokenId: string;
-  orderbook: OrderBook;
-  timestamp: number;
-}
-
-/**
- * Simulation/backtesting types
- */
-export interface HistoricalMarketData {
-  marketId: string;
-  marketType: MarketType;
-  startTime: number;
+/** A fully-sized arbitrage opportunity, ready to execute. */
+export interface Opportunity {
+  asset: string;
   endTime: number;
-  beatPrice: number;
-  priceTimeline: PriceSnapshot[];
-  finalFinishPrice: number;
-  result: MarketResult;
+  beat5m: number;
+  beat15m: number;
+  up: LegPlan;
+  down: LegPlan;
+  shares: number;
+  /** Expected total outlay: both legs' cost + fees. */
+  totalCost: number;
+  /** Upper bound of outlay if every fill hits the limit price. */
+  worstCaseCost: number;
+  /** Guaranteed payout: exactly one leg (or both) pays 1 per share. */
+  guaranteedPayout: number;
+  /** guaranteedPayout - totalCost. */
+  expectedProfit: number;
+  /** Profit per share. */
+  edge: number;
+  /**
+   * Settlement-price band in which both legs win (payout 2 per share).
+   * null when the two strikes are equal.
+   */
+  bothWinBand: { from: number; to: number } | null;
+  detectedAt: number;
 }
 
-export interface SimulationResult {
-  totalTrades: number;
-  successfulTrades: number;
-  failedTrades: number;
-  winRate: number;
-  totalPnL: number;
-  pnlCurve: Array<{ timestamp: number; cumulativePnL: number }>;
-  maxDrawdown: number;
-  latencySensitivity: Array<{ latencyMs: number; successRate: number }>;
+export interface LegFill {
+  side: "BUY" | "SELL";
+  tokenId: string;
+  outcome: Outcome;
+  horizon: Horizon;
+  sharesFilled: number;
+  /** USDC paid (BUY) or received (SELL), excluding fees. */
+  cost: number;
+  fee: number;
+  orderId?: string;
+  status: string;
+  error?: string;
+}
+
+export type TradeStatus = "filled" | "rejected" | "hedged" | "unwound" | "unhedged" | "error";
+
+export interface TradeResult {
+  id: string;
+  mode: "paper" | "live";
+  opportunity: Opportunity;
+  status: TradeStatus;
+  up: LegFill;
+  down: LegFill;
+  /** Extra fills made while repairing a one-sided fill. */
+  repairs: LegFill[];
+  latencyMs: number;
+  note?: string;
 }

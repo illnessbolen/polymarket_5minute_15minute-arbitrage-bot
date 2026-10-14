@@ -1,241 +1,152 @@
-# BTC 5-15 Minute Arbitrage Bot
+# Арбитражный бот Polymarket: 5-минутные и 15-минутные рынки «Up or Down»
 
-Production-grade BTC binary prediction market arbitrage bot for Polymarket.
+Бот ищет и исполняет межрынковый арбитраж между крипто-рынками Polymarket
+«Bitcoin Up or Down — 5 минут» и «— 15 минут» (а также ETH, SOL, XRP, DOGE, BNB, HYPE).
+Работает в двух режимах: **paper** (по умолчанию, ордера не отправляются) и **live**.
 
-## Overview
+## Идея стратегии
 
-This bot monitors BTC 5-minute and 15-minute binary prediction markets and executes arbitrage trades when synchronized markets (same `endTime`) are detected.
+Каждые 15 минут открывается 15-минутный рынок `[S, S+15м)`, а внутри него
+последний 5-минутный рынок `[S+10м, S+15м)`. Оба заканчиваются в один момент
+и разрешаются **по одной и той же цене** (60-секундный TWAP Chainlink в момент окончания):
 
-## Critical Concept: Beat Price
+* рынок платит **UP**, если финальная цена ≥ «price to beat» (страйк), иначе **DOWN**;
+* страйк 15m-рынка — TWAP в момент `S`, страйк 5m-рынка — TWAP в момент `S+10м`.
 
-**Beat Price** is a fixed target BTC price used only to determine the final market outcome at `endTime`. It is:
-- **NOT** a trading price, bid/ask, order-book best price, last traded price, or fair value
-- A resolution threshold, similar to a binary option strike
+Если купить **UP в рынке с меньшим страйком** и **DOWN в рынке с большим страйком**, то:
 
-### Resolution Rule
+| финальная цена F            | UP (низкий страйк) | DOWN (высокий страйк) | выплата |
+|-----------------------------|:------------------:|:---------------------:|:-------:|
+| F < низкий страйк           | 0                  | 1                     | **1**   |
+| низкий ≤ F < высокий        | 1                  | 1                     | **2**   |
+| F ≥ высокий страйк          | 1                  | 0                     | **1**   |
 
-At `endTime`:
-- `finish_price > beat_price` → UP token wins (payout = 1.0)
-- `finish_price < beat_price` → DOWN token wins (payout = 1.0)
+Выплата за пару акций всегда не меньше 1. Если пара стоит дешевле 1 с учётом
+комиссий, разница — зафиксированная прибыль. В промежутке между страйками
+выигрывают обе ноги (бонус ×2). Бот торгует только в последние 5 минут
+15-минутного окна, когда оба страйка известны.
 
-## Arbitrage Strategy
+Эти свойства я проверил на живых данных Polymarket (октябрь 2026):
 
-The bot evaluates arbitrage only when `endTime_5m == endTime_15m` (both markets resolve using the same BTC finish price).
+* `finalPrice` 5m- и 15m-рынков с одинаковым временем окончания совпадает до последнего знака;
+* `priceToBeat` окна равен значению потока `crypto_prices_twap_sixty` (RTDS) с меткой времени начала окна
+  (например, 17:40:00 UTC → `81691.2118318938` и в потоке, и в Gamma).
 
-### Case A: `beatPrice_15m > beatPrice_5m`
-- Trade: BUY UP in 5m, BUY DOWN in 15m
-- Execute if: `price_up_5m + price_down_15m < ARB_THRESHOLD`
+## Что учитывается
 
-### Case B: `beatPrice_5m > beatPrice_15m`
-- Trade: BUY UP in 15m, BUY DOWN in 5m
-- Execute if: `price_up_15m + price_down_5m < ARB_THRESHOLD`
+* **Комиссии taker**: `fee = shares × rate × (p·(1−p))^exponent` из `feeSchedule` рынка
+  (сейчас для крипто-рынков `rate = 0.07`, `exponent = 1`, то есть до 1,75 цента за акцию при p = 0,5).
+* **Глубина стакана**: объём подбирается проходом по обоим стаканам, пока каждая
+  следующая пара акций даёт не меньше `MIN_EDGE` прибыли после комиссий.
+* **Шаг цены** (0.01 или 0.001 у краёв), минимальный размер ордера (5 акций), минимум $1.
+* **Худший случай**: лимитные цены выбираются так, что даже при исполнении по лимиту пара не убыточна.
+* **Задержка taker** на крипто-рынках Polymarket (~150 мс): стакан может измениться,
+  поэтому обе ноги отправляются одним запросом как FOK (всё или ничего).
 
-### Case C: Equal beat prices
-- Check both sums and execute the first valid
+### Если исполнилась только одна нога
 
-## Features
+1. Бот пытается докупить недостающую ногу, если вся пара всё ещё стоит не больше
+   `1 + HEDGE_MAX_LOSS_PER_SHARE` (по умолчанию небольшой контролируемый убыток);
+2. иначе продаёт лишнюю ногу (`UNHEDGED_ACTION=sell`) или оставляет её (`hold`);
+3. если позицию не удалось ни захеджировать, ни закрыть, торговля останавливается (kill switch).
 
-- **Real-time WebSocket feeds** for market data
-- **Atomic trade execution** with ≤50ms timeout
-- **MongoDB persistence** for trade records and market data
-- **JSON logging** for market pairs
-- **Simulation/backtesting** engine
-- **Latency-aware architecture** with stale-data protection
-- **Risk controls** (daily trade limits, position sizing)
+### Риск-лимиты
 
-## Installation
+Лимиты на сделку, окно, число сделок в день, дневной убыток, паузу между сделками,
+запрет на вход в последние секунды перед расчётом, остановку после серии неудач.
+В live-режиме через 5 секунд после каждой сделки бот сверяет балансы токенов на бирже
+со своим учётом и при расхождении останавливает торговлю.
+
+## Установка
+
+Нужен Node.js ≥ 20.10.
 
 ```bash
 npm install
+cp .env.example .env
 npm run build
 ```
 
-## Configuration
-
-Create a `.env` file:
-
-```env
-# Arbitrage threshold (default: 0.9)
-ARB_THRESHOLD=0.9
-
-# Slippage buffer (default: 0.05)
-SLIPPAGE_BUFFER=0.05
-
-# Execution timeout in ms (default: 50)
-EXECUTION_TIMEOUT_MS=50
-
-# MongoDB connection
-MONGO_URI=mongodb://localhost:27017
-MONGO_DB_NAME=btc_arbitrage
-
-# Trading
-ENABLE_TRADING=0  # Set to 1 to enable actual trading
-DEFAULT_QUANTITY=10
-
-# Logging
-LOG_DIR=./logs
-ENABLE_JSON_LOGS=1
-LOG_LEVEL=info
-
-# Risk controls
-MAX_DAILY_TRADES=100
-MAX_POSITION_SIZE=1000
-
-# Data freshness
-MAX_DATA_AGE_MS=5000
-CANCEL_BEFORE_END_TIME_MS=10000
-
-# Polymarket Wallet Configuration (REQUIRED for trading)
-POLY_PRIVATE_KEY=your_private_key_here  # EOA private key (with or without 0x prefix)
-POLY_WALLET_TYPE=0  # 0=EOA (main wallet), 1=proxy, 2=proxy type 2
-POLY_FUNDER=your_proxy_wallet_address  # Required if using proxy wallet (POLY_WALLET_TYPE=1 or 2)
-POLY_RPC_URL=https://polygon-rpc.com  # Polygon RPC endpoint (can use Infura, Alchemy, etc.)
-
-# Polymarket Exchange Contract Address (OPTIONAL - defaults to correct address)
-# IMPORTANT: This is the Polymarket Exchange SMART CONTRACT address, NOT your wallet address
-# It's the contract that needs approval to spend your USDC
-# Default: 0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E (from py-clob-client)
-# Only set this if you need to override the default
-# POLYMARKET_EXCHANGE_ADDRESS=0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E
-```
-
-## Usage
-
-### Run the bot
+## Запуск
 
 ```bash
-npm start
-# or
-npm run dev
+npm run check     # проверка источников данных, текущие рынки и стаканы
+npm start         # бот (по умолчанию paper-режим)
+npm run dev       # то же через ts-node, без сборки
+npm run report    # сводка по журналу: окна, возможности, сделки, PnL
+npm test          # юнит-тесты
 ```
 
-### Run simulation
+В консоль каждые `STATUS_INTERVAL_MS` выводится статус по каждому активу: страйки,
+текущая и минимальная стоимость захеджированной пары, найденные возможности и сделки.
+Журналы пишутся в `LOG_DIR` в формате JSONL:
 
-```bash
-npm run simulate
-```
+* `opportunities.jsonl` — найденные возможности (цены, объём, комиссии, ожидаемая прибыль);
+* `trades.jsonl` — результаты исполнения обеих ног и ремонтных ордеров;
+* `windows.jsonl` — итоги каждого окна: страйки (наши и из Gamma), победители, минимальная цена пары, PnL;
+* `events.jsonl` — старт и остановка, расхождения страйков и балансов.
 
-## Architecture
+## Live-торговля
+
+> Перед live-режимом погоняйте бота в paper-режиме и начните с маленьких лимитов.
+> Это не финансовый совет. Live-ветка написана по официальному SDK
+> `@polymarket/clob-client-v2`: подпись ордеров проверена локально, но реальными деньгами
+> исполнение не тестировалось. Проверьте, что торговля на Polymarket разрешена в вашей
+> юрисдикции и соответствует правилам площадки.
+
+1. Кошелёк:
+   * **аккаунт polymarket.com** (вход по email или через браузерный кошелёк): средства лежат
+     на прокси-кошельке. Укажите `POLY_SIGNATURE_TYPE=1` (email) или `2` (браузерный кошелёк),
+     `POLY_FUNDER` — адрес кошелька с сайта, `POLY_PRIVATE_KEY` — ключ, который подписывает
+     ордера: для входа по email он экспортируется в настройках Polymarket, для браузерного
+     кошелька это ключ самого кошелька. Разрешения (approvals) уже выданы;
+   * **обычный EOA** (`POLY_SIGNATURE_TYPE=0`): на адресе ключа нужны коллатерал Polymarket (pUSD)
+     и немного POL на газ; один раз выполните `npm run approve -- --yes`.
+2. `npm run check -- --wallet` — бот получит (или создаст) API-ключ CLOB и покажет баланс.
+   Чтобы не создавать ключ при каждом старте, можно указать `CLOB_API_KEY/SECRET/PASSPHRASE`.
+3. `TRADING_MODE=live` в `.env`, затем `npm start`.
+4. Выигрыши нужно забрать (redeem) после разрешения рынков: кнопка Claim на polymarket.com.
+   Автоматического redeem в боте нет.
+
+## Ограничения
+
+* Такие возможности появляются нечасто и держатся недолго: рынок обычно оценивает пару
+  в 1 и выше. Перед тем как вкладывать деньги, посмотрите `npm run report` после нескольких часов в paper-режиме.
+* Paper-сделки не забирают ликвидность из стакана, поэтому paper-PnL оптимистичен.
+* Если бот запущен посреди окна и пропустил тик TWAP в момент `S+10м`, это окно пропускается.
+  Страйк 15m берётся из Gamma, если тик в момент `S` был пропущен.
+* Polymarket меняет правила (комиссии, задержку taker, источник цен). Бот читает
+  `feeSchedule` из каждого рынка и сверяет страйки с Gamma; расхождения пишутся в `events.jsonl`.
+
+## Архитектура
 
 ```
 src/
-├── clients/
-│   └── polymarket.ts          # Polymarket API client
+├── index.ts                    точка входа
+├── config.ts                   настройки из .env
+├── types.ts
+├── core/                       чистая логика (покрыта тестами)
+│   ├── arbitrage.ts            выбор пары по страйкам, размер по глубине, проверка худшего случая
+│   ├── fees.ts                 модель комиссий taker
+│   ├── orderbook.ts            локальный стакан L2
+│   └── windows.ts              арифметика 5m/15m окон и slug'ов
+├── feeds/
+│   ├── gamma.ts                поиск рынков и результаты разрешения (Gamma API)
+│   ├── market-stream.ts        стаканы по WebSocket CLOB (book / price_change / best_bid_ask)
+│   ├── chainlink-twap.ts       60-секундный TWAP Chainlink из RTDS (страйки)
+│   └── socket.ts               WebSocket с heartbeat и переподключением
+├── execution/
+│   ├── executor.ts             исполнение пары и ремонт одной ноги
+│   ├── paper-venue.ts          симуляция исполнения по живому стакану
+│   ├── live-venue.ts           реальные ордера через @polymarket/clob-client-v2
+│   └── venue.ts
 ├── services/
-│   ├── arbitrage-orchestrator.ts  # Main orchestrator
-│   ├── market-data-manager.ts     # WebSocket market data manager
-│   ├── arbitrage-detector.ts      # Arbitrage detection engine
-│   ├── trade-executor.ts          # Atomic trade execution
-│   ├── database.ts                # MongoDB service
-│   ├── json-logger.ts             # JSON log file system
-│   └── simulation-engine.ts       # Backtesting engine
-├── types.ts                       # Type definitions
-├── config.ts                      # Configuration
-├── utils/
-│   ├── logger.ts                  # Logging utilities
-│   └── retry.ts                   # Retry logic
-├── index.ts                       # Main entry point
-└── simulate.ts                    # Simulation entry point
+│   ├── bot.ts                  оркестратор: окна, страйки, детекция, расчёт PnL, статус
+│   ├── risk.ts                 лимиты и kill switch
+│   ├── positions.ts            учёт позиций по окну
+│   └── journal.ts              JSONL-журналы
+└── scripts/
+    ├── check.ts                npm run check
+    ├── approve.ts              npm run approve
+    └── report.ts               npm run report
 ```
-
-## MongoDB Schemas
-
-### Trade Record
-```typescript
-{
-  timestamp: number;
-  market5_id: string;
-  market15_id: string;
-  direction: { upMarket: "5m" | "15m", downMarket: "5m" | "15m" };
-  price_up: number;
-  price_down: number;
-  sum_price: number;
-  quantity: number;
-  latency_ms: number;
-  status: "filled" | "canceled" | "failed";
-  pnl_estimate: number;
-}
-```
-
-### Market Data Record
-```typescript
-{
-  market_id: string;
-  market_type: "5m" | "15m";
-  start_time: number;
-  end_time: number;
-  beat_price: number;
-  final_finish_price: number | null;
-  result: "UP" | "DOWN" | "PENDING";
-  price_timeline: PriceSnapshot[];
-}
-```
-
-## Logging
-
-### Terminal Logging
-
-When synchronized markets are detected, the bot prints:
-```
-[SYNC DETECTED]
-Direction: BUY UP in 5m / BUY DOWN in 15m
-Prices: up=0.45, down=0.42
-Sum: 0.87
-Timestamp: 2024-01-01T12:00:00Z
-```
-
-### JSON Log Files
-
-One JSON log per market pair containing:
-- Beat prices
-- Detected direction
-- Trade attempts
-- Execution results
-- Final resolution outcome
-- Realized PnL
-
-## Risk Controls
-
-- **Daily trade limit**: Maximum trades per day
-- **Position sizing**: Maximum position size
-- **Stale data protection**: Rejects trades on stale data
-- **Latency monitoring**: Tracks execution latency
-- **Auto-cancel**: Cancels orders near `endTime`
-
-## Simulation/Backtesting
-
-The simulation engine:
-- Reads historical market JSON logs
-- Replays beat prices, token prices, and `endTime` events
-- Runs the same arbitrage logic
-- Outputs:
-  - Total trades
-  - Win rate
-  - PnL curve
-  - Max drawdown
-  - Latency sensitivity
-
-## Wallet Approval
-
-The bot implements proper EOA (Externally Owned Account) wallet approval:
-
-1. **On-chain USDC approval**: Grants the Polymarket exchange contract permission to spend USDC
-2. **API balance allowance**: Updates CLOB API with current allowances
-3. **Conditional token approval**: Updates allowance for specific conditional tokens before each trade
-
-The approval process runs automatically on bot startup if `ENABLE_TRADING=1`.
-
-## Production Considerations
-
-- ✅ EOA wallet approval implemented
-- ✅ CLOB API integration for order placement
-- ✅ Proper error handling and recovery
-- Set up monitoring and alerting
-- Configure proper MongoDB indexes
-- Implement rate limiting for API calls
-- Add circuit breakers for market volatility
-- Verify contract addresses are up-to-date
-
-## License
-
-ISC
